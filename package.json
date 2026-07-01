@@ -1,0 +1,38 @@
+{
+  "name": "ai-order-bot",
+  "version": "1.0.0",
+  "description": "AI Telegram bot for collecting freelance orders",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:bot": "tsx src/dev-polling.ts",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "ai",
+    "cloudflare",
+    "workers"
+  ],
+  "author": "Nikolas Rhys",
+  "license": "MIT",
+  "dependencies": {
+    "@grammyjs/conversations": "^2.1.1",
+    "grammy": "^1.44.0",
+    "hono": "^4.12.27"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "@types/node": "^24.0.3",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.22.0"
+  }
+}
