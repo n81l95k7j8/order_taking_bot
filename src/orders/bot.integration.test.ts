@@ -466,9 +466,9 @@ describe('bot integration scenarios', () => {
     expect(firstCode).toBeTruthy();
     expect(secondCode).toBeTruthy();
 
-    await bot.handleUpdate(callbackUpdate(Number(ownerId), `owner_brief_${firstCode}`, 'owner-cb10', 99) as any);
+    await bot.handleUpdate(callbackUpdate(Number(ownerId), 'owner_brief_' + firstCode, 'owner-cb10', 99) as any);
     await bot.handleUpdate(messageUpdate(Number(ownerId), 'Brief for the first request', 1007) as any);
-    await bot.handleUpdate(callbackUpdate(Number(ownerId), `owner_brief_${secondCode}`, 'owner-cb11', 99) as any);
+    await bot.handleUpdate(callbackUpdate(Number(ownerId), 'owner_brief_' + secondCode, 'owner-cb11', 99) as any);
     await bot.handleUpdate(messageUpdate(Number(ownerId), 'Brief for the second request', 1008) as any);
 
     const firstOrder = await getOrderStore().getOrder(firstCode!);
@@ -486,5 +486,33 @@ describe('bot integration scenarios', () => {
     );
     expect(ownerLinkMessages.some((call) => String(call.body.text).includes(firstCode!))).toBe(true);
     expect(ownerLinkMessages.some((call) => String(call.body.text).includes(secondCode!))).toBe(false);
+  });
+
+  it('ignores replies to a brief after that request is already completed', async () => {
+    const bot = createTestBot(ownerId, fetchMock);
+    await submitBasicOrder(bot, clientId);
+
+    const orderCode = findOwnerOrderCode(fetchMock, ownerId);
+    await bot.handleUpdate(callbackUpdate(Number(ownerId), 'owner_brief_' + orderCode, 'owner-cb12', 99) as any);
+    await bot.handleUpdate(messageUpdate(Number(ownerId), 'Publish the task on LaborX', 1009) as any);
+
+    const order = await getOrderStore().getOrder(orderCode);
+    expect(order?.brief_message_id).toBeTruthy();
+
+    await bot.handleUpdate(callbackUpdate(Number(ownerId), 'owner_reject_' + orderCode, 'owner-cb13', 99) as any);
+    await bot.handleUpdate(
+      messageUpdate(clientId, 'https://laborx.com/projects/too-late', 10, order!.brief_message_id) as any,
+    );
+
+    const ownerLinkMessages = fetchMock.sent.filter(
+      (call) =>
+        call.method === 'sendMessage' &&
+        String(call.body.chat_id) === ownerId &&
+        String(call.body.text).includes('The client sent a link for request ' + orderCode),
+    );
+    expect(ownerLinkMessages).toHaveLength(0);
+    await expect(getOrderStore().getOrder(orderCode)).resolves.toMatchObject({
+      status: 'rejected',
+    });
   });
 });

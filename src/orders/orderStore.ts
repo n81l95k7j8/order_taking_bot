@@ -43,6 +43,11 @@ export interface OrderStore {
 class InMemoryOrderStore implements OrderStore {
   private orders = new Map<string, OrderRecord>();
   private pendingByOwner = new Map<string, PendingOwnerAction>();
+  private briefIndex = new Map<string, string>();
+
+  private briefKey(clientTelegramId: number, messageId: number): string {
+    return String(clientTelegramId) + ":" + String(messageId);
+  }
 
   async saveOrder(order: FullOrderData): Promise<void> {
     this.orders.set(order.order_code, {
@@ -59,18 +64,29 @@ class InMemoryOrderStore implements OrderStore {
   async updateOrder(order_code: string, patch: Partial<OrderRecord>): Promise<OrderRecord | null> {
     const current = this.orders.get(order_code);
     if (!current) return null;
+    const prevBrief = current.brief_message_id;
     const next: OrderRecord = { ...current, ...patch, updated_at: new Date().toISOString() };
     this.orders.set(order_code, next);
+
+    if (prevBrief && prevBrief !== next.brief_message_id) {
+      this.briefIndex.delete(this.briefKey(current.client.telegram_user_id, prevBrief));
+    }
+
+    if (next.status === 'brief_sent' && next.brief_message_id) {
+      this.briefIndex.set(this.briefKey(next.client.telegram_user_id, next.brief_message_id), order_code);
+    } else if (next.brief_message_id) {
+      this.briefIndex.delete(this.briefKey(next.client.telegram_user_id, next.brief_message_id));
+    }
+
     return next;
   }
 
   async findByBriefMessage(client_telegram_id: number, message_id: number): Promise<OrderRecord | null> {
-    for (const o of this.orders.values()) {
-      if (o.client.telegram_user_id === client_telegram_id && o.brief_message_id === message_id) {
-        return o;
-      }
-    }
-    return null;
+    const orderCode = this.briefIndex.get(this.briefKey(client_telegram_id, message_id));
+    if (!orderCode) return null;
+
+    const order = this.orders.get(orderCode) ?? null;
+    return order?.status === 'brief_sent' ? order : null;
   }
 
   async findActiveBriefsByClient(client_telegram_id: number): Promise<OrderRecord[]> {
@@ -144,6 +160,15 @@ class PersistentOrderStore implements OrderStore {
         { expirationTtl: TTL_ORDER_SECONDS },
       );
     }
+    if (prevBrief && prevBrief !== next.brief_message_id) {
+      await this.store.delete(KEY.briefIndex(next.client.telegram_user_id, prevBrief));
+    }
+    if (prevBrief && prevStatus === 'brief_sent' && next.status !== 'brief_sent') {
+      await this.store.delete(KEY.briefIndex(next.client.telegram_user_id, prevBrief));
+    }
+    if (next.brief_message_id && next.status !== 'brief_sent') {
+      await this.store.delete(KEY.briefIndex(next.client.telegram_user_id, next.brief_message_id));
+    }
     // Index active brief_sent requests by client.
     const becameBrief = prevStatus !== 'brief_sent' && next.status === 'brief_sent';
     const leftBrief = prevStatus === 'brief_sent' && next.status !== 'brief_sent';
@@ -169,7 +194,8 @@ class PersistentOrderStore implements OrderStore {
   async findByBriefMessage(client_telegram_id: number, message_id: number): Promise<OrderRecord | null> {
     const code = await this.store.get(KEY.briefIndex(client_telegram_id, message_id));
     if (!code) return null;
-    return this.getOrder(code);
+    const order = await this.getOrder(code);
+    return order?.status === 'brief_sent' ? order : null;
   }
 
   async findActiveBriefsByClient(client_telegram_id: number): Promise<OrderRecord[]> {

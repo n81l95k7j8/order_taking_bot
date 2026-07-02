@@ -2,6 +2,7 @@ export interface StringKeyValueStore {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
+  markIfAbsent?(key: string, value: string, options?: { expirationTtl?: number }): Promise<boolean>;
 }
 
 interface StoredValue {
@@ -10,6 +11,7 @@ interface StoredValue {
 }
 
 const STATE_PATH = '/state';
+const MARK_IF_ABSENT_PATH = '/state/mark-if-absent';
 const TTL_HEADER = 'x-expiration-ttl';
 
 export class BotStateDurableObject {
@@ -17,37 +19,63 @@ export class BotStateDurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname !== STATE_PATH) {
-      return new Response('Not found', { status: 404 });
-    }
-
     const key = url.searchParams.get('key');
     if (!key) {
       return new Response('Missing key', { status: 400 });
     }
 
-    if (request.method === 'GET') {
-      const record = await this.getRecord(key);
-      return record ? new Response(record.value) : new Response('Not found', { status: 404 });
+    if (url.pathname === STATE_PATH) {
+      if (request.method === 'GET') {
+        const record = await this.getRecord(key);
+        return record ? new Response(record.value) : new Response('Not found', { status: 404 });
+      }
+
+      if (request.method === 'PUT') {
+        const value = await request.text();
+        const ttlSeconds = parseTtl(request.headers.get(TTL_HEADER));
+        await this.putRecord(key, value, ttlSeconds);
+        return new Response(null, { status: 204 });
+      }
+
+      if (request.method === 'DELETE') {
+        await this.state.storage.delete(key);
+        return new Response(null, { status: 204 });
+      }
+
+      return new Response('Method not allowed', { status: 405 });
     }
 
-    if (request.method === 'PUT') {
+    if (url.pathname === MARK_IF_ABSENT_PATH) {
+      if (request.method !== 'POST') {
+        return new Response('Method not allowed', { status: 405 });
+      }
+
+      const existing = await this.getRecord(key);
+      if (existing) {
+        return new Response(JSON.stringify({ inserted: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
       const value = await request.text();
       const ttlSeconds = parseTtl(request.headers.get(TTL_HEADER));
-      const record: StoredValue = {
-        value,
-        expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : undefined,
-      };
-      await this.state.storage.put(key, record);
-      return new Response(null, { status: 204 });
+      await this.putRecord(key, value, ttlSeconds);
+      return new Response(JSON.stringify({ inserted: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
 
-    if (request.method === 'DELETE') {
-      await this.state.storage.delete(key);
-      return new Response(null, { status: 204 });
-    }
+    return new Response('Not found', { status: 404 });
+  }
 
-    return new Response('Method not allowed', { status: 405 });
+  private async putRecord(key: string, value: string, ttlSeconds?: number): Promise<void> {
+    const record: StoredValue = {
+      value,
+      expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : undefined,
+    };
+    await this.state.storage.put(key, record);
   }
 
   private async getRecord(key: string): Promise<StoredValue | null> {
@@ -70,12 +98,13 @@ export function createDurableObjectKeyValueStore(
   const getStub = () => namespace.get(namespace.idFromName(objectName));
 
   async function requestObject(
-    method: 'GET' | 'PUT' | 'DELETE',
+    method: 'GET' | 'PUT' | 'DELETE' | 'POST',
     key: string,
     value?: string,
     options?: { expirationTtl?: number },
+    path = STATE_PATH,
   ): Promise<Response> {
-    const url = new URL(`https://bot-state.local${STATE_PATH}`);
+    const url = new URL(`https://bot-state.local${path}`);
     url.searchParams.set('key', key);
     const headers = new Headers();
     if (options?.expirationTtl) {
@@ -99,6 +128,14 @@ export function createDurableObjectKeyValueStore(
     async delete(key) {
       const response = await requestObject('DELETE', key);
       if (!response.ok) throw new Error(`State delete failed for ${key}: ${response.status}`);
+    },
+    async markIfAbsent(key, value, options) {
+      const response = await requestObject('POST', key, value, options, MARK_IF_ABSENT_PATH);
+      if (!response.ok) {
+        throw new Error(`State mark-if-absent failed for ${key}: ${response.status}`);
+      }
+      const payload = await response.json() as { inserted?: boolean };
+      return payload.inserted === true;
     },
   };
 }

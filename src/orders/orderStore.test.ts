@@ -171,6 +171,37 @@ describe('PersistentOrderStore', () => {
     await expect(store.getPendingOwnerAction('937933861')).resolves.toBeNull();
     expect(backend.ttls.get('pending:937933861')).toBeUndefined();
   });
+  it('removes stale brief lookups after the order leaves brief_sent', async () => {
+    const backend = new MemoryStringStore();
+    const store = createPersistentOrderStore(backend);
+    const code = '#TEST-BRIEF-STALE-' + Math.random().toString(36).slice(2);
+    const clientId = 510_000 + Math.floor(Math.random() * 100_000);
+
+    await store.saveOrder(makeOrder(code, clientId));
+    await store.updateOrder(code, { brief_message_id: 12345, status: 'brief_sent' });
+    await expect(store.findByBriefMessage(clientId, 12345)).resolves.toMatchObject({
+      order_code: code,
+    });
+
+    await store.updateOrder(code, { status: 'accepted' });
+    await expect(store.findByBriefMessage(clientId, 12345)).resolves.toBeNull();
+  });
+
+  it('replaces the brief lookup when a new brief message id is stored', async () => {
+    const backend = new MemoryStringStore();
+    const store = createPersistentOrderStore(backend);
+    const code = '#TEST-BRIEF-ROTATE-' + Math.random().toString(36).slice(2);
+    const clientId = 520_000 + Math.floor(Math.random() * 100_000);
+
+    await store.saveOrder(makeOrder(code, clientId));
+    await store.updateOrder(code, { brief_message_id: 11111, status: 'brief_sent' });
+    await store.updateOrder(code, { brief_message_id: 22222, status: 'brief_sent' });
+
+    await expect(store.findByBriefMessage(clientId, 11111)).resolves.toBeNull();
+    await expect(store.findByBriefMessage(clientId, 22222)).resolves.toMatchObject({
+      order_code: code,
+    });
+  });
 });
 
 describe('setOrderStore', () => {

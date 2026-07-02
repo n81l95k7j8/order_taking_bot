@@ -11,6 +11,11 @@ export async function markUpdateProcessed(
   updateId: number,
 ): Promise<boolean> {
   const key = keyForUpdate(updateId);
+
+  if (store.markIfAbsent) {
+    return store.markIfAbsent(key, '1', { expirationTtl: UPDATE_TTL_SECONDS });
+  }
+
   const existing = await store.get(key);
   if (existing) return false;
 

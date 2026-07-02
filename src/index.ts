@@ -25,6 +25,11 @@ const inMemoryUpdateStore: StringKeyValueStore = {
   async delete(key) {
     inMemoryUpdateValues.delete(key);
   },
+  async markIfAbsent(key, value) {
+    if (inMemoryUpdateValues.has(key)) return false;
+    inMemoryUpdateValues.set(key, value);
+    return true;
+  },
 };
 
 // Health check
